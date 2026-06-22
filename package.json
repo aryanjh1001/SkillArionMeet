@@ -8,6 +8,7 @@
     "test": "node --test test/api.test.js test/whatsapp-template.test.js"
   },
   "dependencies": {
-    "mongodb": "^6.17.0"
+    "mongodb": "^6.17.0",
+    "socket.io": "^4.8.3"
   }
 }

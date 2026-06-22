@@ -13,6 +13,7 @@ const state = {
   transcriptActive: false,
   transcriptSpeechListening: false,
   transcriptSpeechMessage: "",
+  handRaised: false,
   backendOnline: false,
   pendingJoinCode: new URLSearchParams(window.location.search).get("meet") || "",
   pendingInviteToken: new URLSearchParams(window.location.search).get("invite") || "",
@@ -58,7 +59,20 @@ let whatsappCampaigns = [];
 
 let whatsappDraftRecipients = [];
 
-let transcriptRecognition = null;
+let socket = null;
+
+let peerConnections = {};
+let remoteStreams = {};
+let remoteUsers = {};
+
+let currentVideoDeviceId = null;
+let videoDevices = [];
+
+const rtcConfig = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" }
+  ]
+};
 
 const navItems = [
   ["dashboard", "D", "Home"],
@@ -552,18 +566,28 @@ function renderMeeting() {
                 ? `<video id="localVideo" autoplay muted playsinline></video>`
                 : `<div class="tile-initial">${initials(state.user.name)}</div>`}
             <div class="tile-name">${state.user.name} | ${state.screenSharing ? "Presenting" : "You"}</div>
+            ${state.handRaised ? `<div class="hand-raise-badge">✋</div>` : ""}
           </div>
-          ${people.filter(person => !person.isSelf).map(person => `
+          ${people.filter(person => !person.isSelf && !Object.values(remoteUsers).some(u => u.email === person.email)).map(person => `
             <div class="tile">
               <div class="tile-initial">${initials(person.name)}</div>
               <div class="tile-name">${person.name} | ${person.role}</div>
+            </div>
+          `).join("")}
+          ${Object.keys(remoteStreams).map(socketId => `
+            <div class="tile remote-tile" data-socket="${socketId}">
+              <video id="remoteVideo-${socketId}" autoplay playsinline></video>
+              <div class="tile-name">${remoteUsers[socketId]?.name || 'Participant'}</div>
+              ${remoteUsers[socketId]?.handRaised ? `<div class="hand-raise-badge">✋</div>` : ""}
             </div>
           `).join("")}
         </div>
         <div class="controls">
           <button class="control ${state.micOn ? "active" : ""}" id="micBtn" title="${state.micOn ? "Microphone on" : "Microphone off"}" aria-label="${state.micOn ? "Microphone on" : "Microphone off"}">${controlIcon(state.micOn ? "mic" : "micOff")}</button>
           <button class="control ${state.cameraOn ? "active" : ""}" id="cameraBtn" title="Camera" aria-label="Camera">${controlIcon("camera")}</button>
+          ${videoDevices.length > 1 ? `<button class="control" id="switchCameraBtn" title="Switch Camera" aria-label="Switch Camera">${controlIcon("switchCamera")}</button>` : ""}
           <button class="control ${state.screenSharing ? "active" : ""}" id="screenBtn" title="${state.screenSharing ? "Stop presenting" : "Share screen"}" aria-label="${state.screenSharing ? "Stop presenting" : "Share screen"}">${controlIcon("screen")}</button>
+          <button class="control ${state.handRaised ? "active" : ""}" id="handBtn" title="Raise hand" aria-label="Raise hand">${controlIcon("hand")}</button>
           ${canTrackAttendance ? `<button class="control track-control ${state.meetingPanel === "attendance" ? "active" : ""}" id="markAttendanceBtn" title="Track attendance">Track attendance</button>` : ""}
           <button class="control ${state.meetingPanel === "chat" ? "active" : ""}" id="chatBtn" title="Chat" aria-label="Chat">${controlIcon("chat")}</button>
           <button class="control ${state.meetingPanel === "participants" ? "active" : ""}" id="peopleBtn" title="Participants" aria-label="Participants">${controlIcon("people")}</button>
@@ -588,6 +612,8 @@ function controlIcon(name) {
     people: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 19a4 4 0 0 0-8 0"/><circle cx="12" cy="10" r="3"/><path d="M22 19a3.5 3.5 0 0 0-4-3.45"/><path d="M17 8a2.5 2.5 0 0 1 0 5"/><path d="M2 19a3.5 3.5 0 0 1 4-3.45"/><path d="M7 8a2.5 2.5 0 0 0 0 5"/></svg>`,
     more: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5h.01"/><path d="M12 12h.01"/><path d="M12 19h.01"/></svg>`,
     phone: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 10.5c3.4-2 7.6-2 11 0"/><path d="M8.5 9.5l-2 3.5 3 1.5 1.5-2.5"/><path d="M15.5 9.5l2 3.5-3 1.5-1.5-2.5"/></svg>`,
+    hand: `<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor" stroke="none"><path d="M18.5 10.5V7a1.5 1.5 0 0 0-3 0v1A1.5 1.5 0 0 0 12.5 5v1A1.5 1.5 0 0 0 9.5 4v8A1.5 1.5 0 0 0 6.5 13H6a1.5 1.5 0 0 0-1.5 1.5v2C4.5 20.64 7.86 24 12 24s7.5-3.36 7.5-7.5v-6a1.5 1.5 0 0 0-1-1.4z"/></svg>`,
+    switchCamera: `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12A9 9 0 0 0 6.64 5.64L3 9M3 12a9 9 0 0 0 14.36 6.36L21 15M21 9v6M3 15V9"/></svg>`,
   };
   return `<span class="control-icon">${icons[name] || icons.more}</span>`;
 }
@@ -1178,7 +1204,7 @@ function renderGuests() {
         <div class="grid">
           <div class="field"><label>Name</label><input id="guestName" placeholder="Guest name" /></div>
           <div class="field"><label>Email</label><input id="guestEmail" placeholder="guest@example.com" /></div>
-          <div class="field"><label>Assigned meeting</label><input id="guestMeeting" placeholder="Exact meeting code or title" /></div>
+          <div class="field"><label>Assigned meeting</label><select id="guestMeeting" class="input-field"><option value="">General access (No specific meeting)</option>${meetings.map(m => `<option value="${m.code}">${m.title} (${m.code})</option>`).join("")}</select></div>
           <button class="btn primary" id="addGuestBtn">Add guest</button>
         </div>
       </section>
@@ -1280,6 +1306,7 @@ function meetingRow(meeting) {
         <div class="muted">${meetingAccessLabel(meeting)}</div>
       </div>
       <div class="actions">
+        ${meeting.code ? `<button class="btn" style="padding: 4px 8px; font-size: 12px;" onclick="navigator.clipboard.writeText(window.location.origin + '/?meet=' + '${meeting.code}').then(()=>alert('Link copied!'))">Copy Link</button>` : ""}
         <span class="pill ${meeting.status === "Live" ? "ok" : ""}">${meeting.status}</span>
         <span class="pill">${meeting.participants}</span>
       </div>
@@ -1627,7 +1654,15 @@ function bindShell() {
   document.querySelector("#micBtn")?.addEventListener("click", toggleMicrophone);
 
   document.querySelector("#cameraBtn")?.addEventListener("click", toggleCamera);
+  document.querySelector("#switchCameraBtn")?.addEventListener("click", switchCamera);
   document.querySelector("#screenBtn")?.addEventListener("click", shareScreen);
+  document.querySelector("#handBtn")?.addEventListener("click", () => {
+    state.handRaised = !state.handRaised;
+    if (socket && state.activeMeeting?.code) {
+      socket.emit("hand-raise", state.handRaised);
+    }
+    render();
+  });
   document.querySelector("#chatBtn")?.addEventListener("click", async () => {
     state.meetingPanel = state.meetingPanel === "chat" ? "" : "chat";
     if (state.meetingPanel === "chat") {
@@ -1719,11 +1754,69 @@ function bindShell() {
 
   attachLocalVideo();
   attachScreenVideo();
+  attachRemoteVideos();
+}
+
+function attachRemoteVideos() {
+  Object.keys(remoteStreams).forEach(socketId => {
+    const video = document.querySelector(`#remoteVideo-${socketId}`);
+    if (video && video.srcObject !== remoteStreams[socketId]) {
+      video.srcObject = remoteStreams[socketId];
+    }
+  });
+}
+
+function detectActiveSpeaker(stream, tileId) {
+  if (!stream || stream.getAudioTracks().length === 0) return;
+  
+  try {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = audioContext.createAnalyser();
+    const microphone = audioContext.createMediaStreamSource(stream);
+
+    analyser.smoothingTimeConstant = 0.8;
+    analyser.fftSize = 1024;
+
+    microphone.connect(analyser);
+    
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    const updateVolume = () => {
+      if (!stream.active) return;
+      
+      analyser.getByteFrequencyData(dataArray);
+      let sum = 0;
+      for(let i=0; i<dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      const avg = sum / dataArray.length;
+      
+      let tile = null;
+      if (tileId === "selfTile") {
+         tile = document.getElementById("selfTile");
+      } else {
+         const videoEl = document.getElementById(tileId);
+         if (videoEl) tile = videoEl.closest('.tile');
+      }
+      
+      if (tile) {
+        if (avg > 15) {
+          tile.classList.add("active-speaker");
+        } else {
+          tile.classList.remove("active-speaker");
+        }
+      }
+      requestAnimationFrame(updateVolume);
+    };
+    updateVolume();
+  } catch(e) {
+    console.error("Audio context for active speaker failed", e);
+  }
 }
 
 async function toggleMicrophone() {
   if (state.micOn) {
     stopMicrophone();
+    syncLocalTracksToPeers();
     render();
     return;
   }
@@ -1734,6 +1827,8 @@ async function toggleMicrophone() {
   try {
     state.audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     state.micOn = true;
+    detectActiveSpeaker(state.audioStream, "selfTile");
+    syncLocalTracksToPeers();
     render();
   } catch (error) {
     alert("Microphone permission was not available in this browser session.");
@@ -1749,15 +1844,55 @@ function stopMicrophone() {
 async function toggleCamera() {
   if (state.cameraOn) {
     stopCamera();
+    syncLocalTracksToPeers();
     render();
     return;
   }
   try {
-    state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    const constraints = currentVideoDeviceId ? { video: { deviceId: { exact: currentVideoDeviceId } }, audio: false } : { video: true, audio: false };
+    state.stream = await navigator.mediaDevices.getUserMedia(constraints);
     state.cameraOn = true;
+    detectActiveSpeaker(state.stream, "selfTile");
+    syncLocalTracksToPeers();
+    
+    if (!videoDevices.length) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      videoDevices = devices.filter(d => d.kind === 'videoinput');
+      if (videoDevices.length > 0 && !currentVideoDeviceId) {
+        // the one we just got is likely the default
+        const currentStreamTrack = state.stream.getVideoTracks()[0];
+        const activeDevice = videoDevices.find(d => d.label === currentStreamTrack.label);
+        currentVideoDeviceId = activeDevice ? activeDevice.deviceId : videoDevices[0].deviceId;
+      }
+    }
+    
     render();
   } catch (error) {
     alert("Camera permission was not available in this browser session.");
+  }
+}
+
+async function switchCamera() {
+  if (videoDevices.length <= 1) return;
+  const currentIndex = videoDevices.findIndex(d => d.deviceId === currentVideoDeviceId);
+  const nextIndex = (currentIndex + 1) % videoDevices.length;
+  currentVideoDeviceId = videoDevices[nextIndex].deviceId;
+  
+  if (state.cameraOn) {
+    stopCamera();
+    try {
+      state.stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { deviceId: { exact: currentVideoDeviceId } }, 
+        audio: false 
+      });
+      state.cameraOn = true;
+      detectActiveSpeaker(state.stream, "selfTile");
+      syncLocalTracksToPeers();
+      render();
+    } catch(e) {
+      console.error(e);
+      alert("Could not switch camera.");
+    }
   }
 }
 
@@ -1786,6 +1921,7 @@ function stopCamera() {
 async function shareScreen() {
   if (state.screenSharing) {
     stopScreenShare();
+    syncLocalTracksToPeers();
     render();
     return;
   }
@@ -1798,8 +1934,10 @@ async function shareScreen() {
     state.screenSharing = true;
     state.screenStream.getVideoTracks()[0]?.addEventListener("ended", () => {
       stopScreenShare();
+      syncLocalTracksToPeers();
       render();
     }, { once: true });
+    syncLocalTracksToPeers();
     render();
   } catch (error) {
     alert("Screen sharing was cancelled or blocked.");
@@ -1956,6 +2094,88 @@ async function joinMeetingWithCode(codeValue) {
     meetings = meetings.map(meeting => meeting.id === result.meeting.id ? result.meeting : meeting);
     state.route = "meeting";
     state.backendOnline = true;
+
+    if (!socket) {
+      socket = io();
+      socket.on("chat-message", (message) => {
+        if (!chatMessages.find(m => m.id === message.id)) {
+          chatMessages.push(message);
+          if (state.meetingPanel === "chat") {
+            render();
+          }
+        }
+      });
+      
+      socket.on("user-connected", async (userPayload, socketId) => {
+        remoteUsers[socketId] = userPayload;
+        const pc = createPeerConnection(socketId, userPayload);
+        
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+        pc.addTransceiver('video', { direction: 'recvonly' });
+
+        const streamToShare = state.screenSharing ? state.screenStream : new MediaStream();
+        if (!state.screenSharing) {
+           if (state.stream) state.stream.getTracks().forEach(t => streamToShare.addTrack(t));
+           if (state.audioStream) state.audioStream.getTracks().forEach(t => streamToShare.addTrack(t));
+        }
+        streamToShare.getTracks().forEach(track => pc.addTrack(track, streamToShare));
+        render();
+      });
+
+      socket.on("hand-raise", (socketId, isRaised) => {
+        if (remoteUsers[socketId]) {
+          remoteUsers[socketId].handRaised = isRaised;
+          render();
+        }
+      });
+
+      socket.on("webrtc-offer", async (socketId, offer, userPayload) => {
+        let pc = peerConnections[socketId];
+        if (!pc) {
+          remoteUsers[socketId] = userPayload;
+          pc = createPeerConnection(socketId, userPayload);
+          
+          const streamToShare = state.screenSharing ? state.screenStream : new MediaStream();
+          if (!state.screenSharing) {
+             if (state.stream) state.stream.getTracks().forEach(t => streamToShare.addTrack(t));
+             if (state.audioStream) state.audioStream.getTracks().forEach(t => streamToShare.addTrack(t));
+          }
+          streamToShare.getTracks().forEach(track => pc.addTrack(track, streamToShare));
+        }
+        
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("webrtc-answer", socketId, answer);
+        render();
+      });
+
+      socket.on("webrtc-answer", async (socketId, answer) => {
+        const pc = peerConnections[socketId];
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+      });
+
+      socket.on("webrtc-ice-candidate", async (socketId, candidate) => {
+        const pc = peerConnections[socketId];
+        if (pc) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      });
+
+      socket.on("user-disconnected", (userPayload, socketId) => {
+        if (peerConnections[socketId]) {
+          peerConnections[socketId].close();
+          delete peerConnections[socketId];
+        }
+        delete remoteStreams[socketId];
+        delete remoteUsers[socketId];
+        render();
+      });
+    }
+    socket.emit("join-room", code, { email: state.user.email, name: state.user.name, role: state.user.role });
+
     await loadActiveMeetingChatMessages();
     render();
   } catch (error) {
@@ -2027,6 +2247,17 @@ async function endMeeting() {
   state.activeMeeting = null;
   state.activeAttendance = null;
   state.route = "dashboard";
+  
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+  
+  Object.values(peerConnections).forEach(pc => pc.close());
+  peerConnections = {};
+  remoteStreams = {};
+  remoteUsers = {};
+
   await loadBootstrapData();
   if (state.user.role !== "Admin" && state.leaveMessage) {
     alert(state.leaveMessage);
@@ -2058,6 +2289,10 @@ async function sendChatMessage(text) {
     }).catch(() => {
       state.backendOnline = false;
     });
+  }
+
+  if (socket && state.activeMeeting?.code) {
+    socket.emit("chat-message", message);
   }
 
   if (state.transcriptActive) {
@@ -2580,6 +2815,62 @@ function initials(name) {
     .slice(0, 2)
     .map(part => part[0].toUpperCase())
     .join("");
+}
+
+function createPeerConnection(socketId, userPayload) {
+  const pc = new RTCPeerConnection(rtcConfig);
+  peerConnections[socketId] = pc;
+  
+  pc.onicecandidate = (event) => {
+    if (event.candidate && socket) {
+      socket.emit("webrtc-ice-candidate", socketId, event.candidate);
+    }
+  };
+  
+  pc.onnegotiationneeded = async () => {
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      if (socket) socket.emit("webrtc-offer", socketId, offer);
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  pc.ontrack = (event) => {
+    if (!remoteStreams[socketId]) {
+      remoteStreams[socketId] = new MediaStream();
+      render();
+      setTimeout(() => {
+        detectActiveSpeaker(remoteStreams[socketId], `remoteVideo-${socketId}`);
+      }, 500);
+    }
+    remoteStreams[socketId].addTrack(event.track);
+  };
+  
+  return pc;
+}
+
+function syncLocalTracksToPeers() {
+  const streamToShare = state.screenSharing ? state.screenStream : new MediaStream();
+  if (!state.screenSharing) {
+    if (state.stream) state.stream.getTracks().forEach(t => streamToShare.addTrack(t));
+    if (state.audioStream) state.audioStream.getTracks().forEach(t => streamToShare.addTrack(t));
+  }
+
+  Object.values(peerConnections).forEach(pc => {
+    const senders = pc.getSenders();
+    senders.forEach(sender => {
+      if (sender.track && !streamToShare.getTracks().includes(sender.track)) {
+        pc.removeTrack(sender);
+      }
+    });
+    streamToShare.getTracks().forEach(track => {
+      if (!senders.find(s => s.track === track)) {
+        pc.addTrack(track, streamToShare);
+      }
+    });
+  });
 }
 
 async function initApp() {

@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const dns = require("dns");
+const { Server } = require("socket.io");
 const { buildTemplateComponents, validateTemplateDefinition } = require("./whatsapp-template");
 
 loadEnvFile();
@@ -110,6 +111,44 @@ server.on("error", error => {
     process.exit(1);
   }
   throw error;
+});
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+io.on("connection", (socket) => {
+  socket.on("join-room", (roomId, userPayload) => {
+    socket.join(roomId);
+    socket.to(roomId).emit("user-connected", userPayload, socket.id);
+
+    socket.on("disconnect", () => {
+      socket.to(roomId).emit("user-disconnected", userPayload, socket.id);
+    });
+
+    socket.on("chat-message", (message) => {
+      io.to(roomId).emit("chat-message", message);
+    });
+    
+    socket.on("hand-raise", (isRaised) => {
+      socket.to(roomId).emit("hand-raise", socket.id, isRaised);
+    });
+
+    socket.on("webrtc-offer", (targetSocketId, offer) => {
+      socket.to(targetSocketId).emit("webrtc-offer", socket.id, offer, userPayload);
+    });
+
+    socket.on("webrtc-answer", (targetSocketId, answer) => {
+      socket.to(targetSocketId).emit("webrtc-answer", socket.id, answer);
+    });
+
+    socket.on("webrtc-ice-candidate", (targetSocketId, candidate) => {
+      socket.to(targetSocketId).emit("webrtc-ice-candidate", socket.id, candidate);
+    });
+  });
 });
 
 server.listen(port, host, () => {
