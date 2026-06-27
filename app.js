@@ -1907,18 +1907,40 @@ async function switchCamera() {
   }
 }
 
-function attachLocalVideo() {
-  const video = document.querySelector("#localVideo");
-  if (video && state.stream) {
-    video.srcObject = state.stream;
+function updateSelfTileDOM() {
+  const selfTile = document.getElementById("selfTile");
+  if (!selfTile) return;
+  
+  const nameDiv = `<div class="tile-name">${state.user?.name || ''} | ${state.screenSharing ? "Presenting" : "You"}</div>`;
+  const badgeDiv = state.handRaised ? `<div class="hand-raise-badge">✋</div>` : "";
+  
+  let mediaHtml = "";
+  if (state.screenSharing) {
+    mediaHtml = `<video id="screenVideo" autoplay muted playsinline></video>`;
+  } else if (state.cameraOn) {
+    mediaHtml = `<video id="localVideo" autoplay muted playsinline></video>`;
+  } else {
+    mediaHtml = `<div class="tile-initial">${initials(state.user?.name || '')}</div>`;
+  }
+  
+  selfTile.innerHTML = mediaHtml + nameDiv + badgeDiv;
+  
+  if (state.screenSharing) {
+    const v = document.getElementById("screenVideo");
+    if (v && state.screenStream) v.srcObject = state.screenStream;
+  }
+  if (state.cameraOn) {
+    const v = document.getElementById("localVideo");
+    if (v && state.stream) v.srcObject = state.stream;
   }
 }
 
+function attachLocalVideo() {
+  updateSelfTileDOM();
+}
+
 function attachScreenVideo() {
-  const video = document.querySelector("#screenVideo");
-  if (video && state.screenStream) {
-    video.srcObject = state.screenStream;
-  }
+  updateSelfTileDOM();
 }
 
 function stopCamera() {
