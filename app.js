@@ -583,10 +583,10 @@ function renderMeeting() {
           `).join("")}
         </div>
         <div class="controls">
-          <button class="control ${state.micOn ? "active" : ""}" id="micBtn" title="${state.micOn ? "Microphone on" : "Microphone off"}" aria-label="${state.micOn ? "Microphone on" : "Microphone off"}">${controlIcon(state.micOn ? "mic" : "micOff")}</button>
-          <button class="control ${state.cameraOn ? "active" : ""}" id="cameraBtn" title="Camera" aria-label="Camera">${controlIcon("camera")}</button>
+          <button class="control ${!state.micOn ? "danger" : ""}" id="micBtn" title="${state.micOn ? "Microphone on" : "Microphone off"}" aria-label="${state.micOn ? "Microphone on" : "Microphone off"}">${controlIcon(state.micOn ? "mic" : "micOff")}</button>
+          <button class="control ${!state.cameraOn ? "danger" : ""}" id="cameraBtn" title="Camera" aria-label="Camera">${controlIcon("camera")}</button>
           ${videoDevices.length > 1 ? `<button class="control" id="switchCameraBtn" title="Switch Camera" aria-label="Switch Camera">${controlIcon("switchCamera")}</button>` : ""}
-          <button class="control ${state.screenSharing ? "active" : ""}" id="screenBtn" title="${state.screenSharing ? "Stop presenting" : "Share screen"}" aria-label="${state.screenSharing ? "Stop presenting" : "Share screen"}">${controlIcon("screen")}</button>
+          <button class="control ${state.screenSharing ? "active-blue" : ""}" id="screenBtn" title="${state.screenSharing ? "Stop presenting" : "Share screen"}" aria-label="${state.screenSharing ? "Stop presenting" : "Share screen"}">${controlIcon("screen")}</button>
           <button class="control ${state.handRaised ? "active" : ""}" id="handBtn" title="Raise hand" aria-label="Raise hand">${controlIcon("hand")}</button>
           ${canTrackAttendance ? `<button class="control track-control ${state.meetingPanel === "attendance" ? "active" : ""}" id="markAttendanceBtn" title="Track attendance">Track attendance</button>` : ""}
           <button class="control ${state.meetingPanel === "chat" ? "active" : ""}" id="chatBtn" title="Chat" aria-label="Chat">${controlIcon("chat")}</button>
@@ -1817,7 +1817,11 @@ async function toggleMicrophone() {
   if (state.micOn) {
     stopMicrophone();
     syncLocalTracksToPeers();
-    render();
+    const btn = document.getElementById("micBtn");
+    if (btn) {
+      btn.classList.add("danger");
+      btn.innerHTML = controlIcon("micOff");
+    }
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -1829,7 +1833,11 @@ async function toggleMicrophone() {
     state.micOn = true;
     detectActiveSpeaker(state.audioStream, "selfTile");
     syncLocalTracksToPeers();
-    render();
+    const btn = document.getElementById("micBtn");
+    if (btn) {
+      btn.classList.remove("danger");
+      btn.innerHTML = controlIcon("mic");
+    }
   } catch (error) {
     alert("Microphone permission was not available in this browser session.");
   }
@@ -1845,7 +1853,9 @@ async function toggleCamera() {
   if (state.cameraOn) {
     stopCamera();
     syncLocalTracksToPeers();
-    render();
+    const btn = document.getElementById("cameraBtn");
+    if (btn) btn.classList.add("danger");
+    attachLocalVideo();
     return;
   }
   try {
@@ -1859,14 +1869,15 @@ async function toggleCamera() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       videoDevices = devices.filter(d => d.kind === 'videoinput');
       if (videoDevices.length > 0 && !currentVideoDeviceId) {
-        // the one we just got is likely the default
         const currentStreamTrack = state.stream.getVideoTracks()[0];
         const activeDevice = videoDevices.find(d => d.label === currentStreamTrack.label);
         currentVideoDeviceId = activeDevice ? activeDevice.deviceId : videoDevices[0].deviceId;
       }
     }
     
-    render();
+    const btn = document.getElementById("cameraBtn");
+    if (btn) btn.classList.remove("danger");
+    attachLocalVideo();
   } catch (error) {
     alert("Camera permission was not available in this browser session.");
   }
@@ -1922,7 +1933,9 @@ async function shareScreen() {
   if (state.screenSharing) {
     stopScreenShare();
     syncLocalTracksToPeers();
-    render();
+    const btn = document.getElementById("screenBtn");
+    if (btn) btn.classList.remove("active-blue");
+    attachLocalVideo();
     return;
   }
   if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -1935,10 +1948,14 @@ async function shareScreen() {
     state.screenStream.getVideoTracks()[0]?.addEventListener("ended", () => {
       stopScreenShare();
       syncLocalTracksToPeers();
-      render();
+      const btn = document.getElementById("screenBtn");
+      if (btn) btn.classList.remove("active-blue");
+      attachLocalVideo();
     }, { once: true });
     syncLocalTracksToPeers();
-    render();
+    const btn = document.getElementById("screenBtn");
+    if (btn) btn.classList.add("active-blue");
+    attachLocalVideo();
   } catch (error) {
     alert("Screen sharing was cancelled or blocked.");
   }
@@ -2147,7 +2164,6 @@ async function joinMeetingWithCode(codeValue) {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit("webrtc-answer", socketId, answer);
-        render();
       });
 
       socket.on("webrtc-answer", async (socketId, answer) => {
@@ -2860,14 +2876,22 @@ function syncLocalTracksToPeers() {
 
   Object.values(peerConnections).forEach(pc => {
     const senders = pc.getSenders();
-    senders.forEach(sender => {
-      if (sender.track && !streamToShare.getTracks().includes(sender.track)) {
-        pc.removeTrack(sender);
+    
+    streamToShare.getTracks().forEach(track => {
+      const existingSender = senders.find(s => s.track === track);
+      if (!existingSender) {
+         const senderToReplace = senders.find(s => s.track && s.track.kind === track.kind && !streamToShare.getTracks().includes(s.track));
+         if (senderToReplace) {
+           senderToReplace.replaceTrack(track);
+         } else {
+           pc.addTrack(track, streamToShare);
+         }
       }
     });
-    streamToShare.getTracks().forEach(track => {
-      if (!senders.find(s => s.track === track)) {
-        pc.addTrack(track, streamToShare);
+
+    pc.getSenders().forEach(sender => {
+      if (sender.track && !streamToShare.getTracks().includes(sender.track)) {
+        pc.removeTrack(sender);
       }
     });
   });
