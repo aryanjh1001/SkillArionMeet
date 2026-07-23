@@ -2217,6 +2217,7 @@ async function joinMeetingWithCode(codeValue) {
         delete remoteUsers[socketId];
         render();
       });
+    }
     try {
       state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       state.cameraOn = true;
