@@ -84,6 +84,7 @@ const seedDb = {
   transcripts: [],
 };
 
+
 ensureDb();
 
 const server = http.createServer(async (request, response) => {
@@ -92,6 +93,12 @@ const server = http.createServer(async (request, response) => {
 
     if (requestedUrl.pathname.startsWith("/api/")) {
       await handleApi(request, response, requestedUrl);
+      return;
+    }
+
+    if (requestedUrl.pathname === "/app-config.js") {
+      response.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-cache" });
+      response.end(`window.SKILL_ARION_CONFIG = { googleClientId: "${googleClientId.trim()}" };`);
       return;
     }
 
