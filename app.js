@@ -70,7 +70,22 @@ let videoDevices = [];
 
 const rtcConfig = {
   iceServers: [
-    { urls: "stun:stun.l.google.com:19302" }
+    { urls: "stun:stun.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    }
   ]
 };
 
@@ -177,7 +192,7 @@ function renderLogin() {
             <strong>Candidate</strong><br /><span class="muted">Google sign-in</span>
           </button>
           <button class="role-card" data-role="Guest">
-            <strong>Guest</strong><br /><span class="muted">Admin-approved email</span>
+            <strong>Guest</strong><br /><span class="muted">Direct access</span>
           </button>
         </div>
         <div class="field">
@@ -475,19 +490,11 @@ function renderCandidateConsentCard(candidate) {
 
 function renderGuestDashboard() {
   return `
-    <div class="grid">
-      <section class="home-hero">
-        <div>
-          <div class="login-kicker">Guest access</div>
-          <h1>Enter a meeting with limited access.</h1>
-          <p>Guests can join assigned rooms only. Admin controls attendance, reports, and transcript access.</p>
-        </div>
-      </section>
-      <div class="grid cols-2">
+    <div class="grid cols-2" style="max-width: 800px; margin: 0 auto;">
       <section class="panel">
         <div class="panel-header">
-          <h2>Guest meeting access</h2>
-          <span class="pill warn">Limited</span>
+          <h2>Join Meeting</h2>
+          <p>You are joining as a Guest. Please enter the meeting code or link below.</p>
         </div>
         <div class="field">
           <label>Meeting code or invite link</label>
@@ -496,19 +503,18 @@ function renderGuestDashboard() {
         <div class="actions" style="margin-top: 14px;">
           <button class="btn primary" id="joinMeetingBtn">Join meeting</button>
         </div>
-        ${state.joinMessage ? `<div class="muted" style="margin-top: 10px;">${state.joinMessage}</div>` : ""}
+        ${state.joinMessage ? `<div class="notice warn" style="margin-top: 10px;">${state.joinMessage}</div>` : ""}
       </section>
       <section class="panel">
         <div class="panel-header">
-          <h2>Guest permissions</h2>
+          <h2>Guest Permissions</h2>
         </div>
         <div class="list">
-          <div class="card">Join assigned meetings only</div>
-          <div class="card">Use audio and video after host approval</div>
-          <div class="card">No admin reports or guest management access</div>
+          <div class="card">Use audio and video instantly</div>
+          <div class="card">Share your screen with the room</div>
+          <div class="card">Participate in live chat</div>
         </div>
       </section>
-      </div>
     </div>
   `;
 }
@@ -2211,9 +2217,21 @@ async function joinMeetingWithCode(codeValue) {
         delete remoteUsers[socketId];
         render();
       });
+    try {
+      state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      state.cameraOn = true;
+      state.micOn = true;
+      // Start tracks as disabled so they are muted by default, giving users privacy
+      state.stream.getTracks().forEach(t => t.enabled = false);
+      state.cameraOn = false;
+      state.micOn = false;
+    } catch (e) {
+      console.error("Could not capture media before joining:", e);
     }
     socket.emit("join-room", code, { email: state.user.email, name: state.user.name, role: state.user.role });
-
+    
+    // Explicitly update self tile to reflect muted state and wait for it
+    updateSelfTileDOM();
     await loadActiveMeetingChatMessages();
     render();
   } catch (error) {

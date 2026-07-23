@@ -198,22 +198,23 @@ async function handleApi(request, response, requestedUrl) {
     };
     sendJson(response, 200, { ...user, token: createSession(user) });
     return;
+    return;
   }
 
   if (method === "POST" && pathname === "/api/auth/guest") {
     const body = await readJsonBody(request);
     const email = String(body.email || "").trim().toLowerCase();
-    const guest = findGuestByEmail(db, email);
-    if (!guest) {
-      sendJson(response, 401, { error: "Guest access not found. Ask Admin to add this guest first." });
+    const name = String(body.name || "").trim();
+    if (!email) {
+      sendJson(response, 400, { error: "Email is required to join." });
       return;
     }
     const user = {
-      name: guest.name || body.name || "Guest User",
-      email: guest.email,
+      name: name || "Guest User",
+      email: email,
       role: "Guest",
-      status: guest.status || "Invited",
-      meeting: guest.meeting || "General access",
+      status: "Joined",
+      meeting: "General access",
     };
     sendJson(response, 200, { ...user, token: createSession(user) });
     return;
@@ -1098,12 +1099,11 @@ function getMeetingAccessError(db, meeting, body) {
   }
 
   if (role === "guest") {
-    const guestRecords = findGuestRecordsByEmail(db, email);
-    if (!guestRecords.length) {
-      return "Guest access not found. Ask Admin to add this guest first.";
+    if (accessMode === "candidates") {
+      return "This meeting is for candidates only.";
     }
-    if (!guestRecords.some(guest => guestCanJoinMeeting(guest, meeting))) {
-      return "This guest is not assigned to this meeting. Please contact the admin.";
+    if (accessMode === "invited" && (!email || !allowedEmails.includes(email))) {
+      return "You are not invited to this meeting. Please contact the admin.";
     }
   }
 
