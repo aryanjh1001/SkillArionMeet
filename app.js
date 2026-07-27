@@ -62,6 +62,10 @@ let whatsappDraftRecipients = [];
 let socket = null;
 
 let peerConnections = {};
+let makingOffers = {};
+let ignoreOffers = {};
+let isSettingRemoteAnswerPendings = {};
+let iceCandidateQueues = {};
 let remoteStreams = {};
 let remoteUsers = {};
 
@@ -2195,23 +2199,73 @@ async function joinMeetingWithCode(codeValue) {
           tracks.forEach(track => pc.addTrack(track, streamToShare));
         }
         
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("webrtc-answer", socketId, answer);
+        try {
+          const isPolite = socket.id > socketId;
+          const offerCollision = (makingOffers[socketId] || pc.signalingState !== "stable");
+
+          ignoreOffers[socketId] = !isPolite && offerCollision;
+          if (ignoreOffers[socketId]) {
+            console.log(`[webrtc-offer] Collision detected. I am impolite. Ignoring offer from socketId=${socketId}`);
+            return;
+          }
+
+          isSettingRemoteAnswerPendings[socketId] = offerCollision;
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          isSettingRemoteAnswerPendings[socketId] = false;
+
+          await pc.setLocalDescription();
+          socket.emit("webrtc-answer", socketId, pc.localDescription);
+
+          const queue = iceCandidateQueues[socketId] || [];
+          if (queue.length > 0) {
+             console.log(`[webrtc-offer] Processing ${queue.length} queued ICE candidates for socketId=${socketId}`);
+             for (const candidate of queue) {
+                await pc.addIceCandidate(new RTCIceCandidate(candidate));
+             }
+             iceCandidateQueues[socketId] = [];
+          }
+        } catch (err) {
+          console.error("[webrtc-offer] Error processing offer:", err);
+        }
       });
 
       socket.on("webrtc-answer", async (socketId, answer) => {
         const pc = peerConnections[socketId];
         if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            
+            const queue = iceCandidateQueues[socketId] || [];
+            if (queue.length > 0) {
+               console.log(`[webrtc-answer] Processing ${queue.length} queued ICE candidates for socketId=${socketId}`);
+               for (const candidate of queue) {
+                  await pc.addIceCandidate(new RTCIceCandidate(candidate));
+               }
+               iceCandidateQueues[socketId] = [];
+            }
+          } catch (err) {
+            console.error("[webrtc-answer] Error processing answer:", err);
+          }
         }
       });
 
       socket.on("webrtc-ice-candidate", async (socketId, candidate) => {
         const pc = peerConnections[socketId];
         if (pc) {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          try {
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } else {
+              if (iceCandidateQueues[socketId]) {
+                console.log(`[webrtc-ice-candidate] Queuing ICE candidate for socketId=${socketId} since remoteDescription is not set`);
+                iceCandidateQueues[socketId].push(candidate);
+              }
+            }
+          } catch (err) {
+            if (!ignoreOffers[socketId]) {
+              console.error("[webrtc-ice-candidate] Error adding ICE candidate:", err);
+            }
+          }
         }
       });
 
@@ -2885,6 +2939,10 @@ function createPeerConnection(socketId, userPayload) {
   console.log(`[createPeerConnection] Creating new RTCPeerConnection for socketId=${socketId}`);
   const pc = new RTCPeerConnection(rtcConfig);
   peerConnections[socketId] = pc;
+  makingOffers[socketId] = false;
+  ignoreOffers[socketId] = false;
+  isSettingRemoteAnswerPendings[socketId] = false;
+  iceCandidateQueues[socketId] = [];
   
   pc.oniceconnectionstatechange = () => {
     console.log(`[iceconnectionstatechange] socketId=${socketId} state changed to: ${pc.iceConnectionState}`);
@@ -2904,11 +2962,13 @@ function createPeerConnection(socketId, userPayload) {
   pc.onnegotiationneeded = async () => {
     console.log(`[onnegotiationneeded] Fired for socketId=${socketId}. Creating offer...`);
     try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      if (socket) socket.emit("webrtc-offer", socketId, offer);
+      makingOffers[socketId] = true;
+      await pc.setLocalDescription();
+      if (socket) socket.emit("webrtc-offer", socketId, pc.localDescription);
     } catch(e) {
       console.error(e);
+    } finally {
+      makingOffers[socketId] = false;
     }
   };
 
