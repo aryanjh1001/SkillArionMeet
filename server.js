@@ -97,7 +97,12 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (requestedUrl.pathname === "/app-config.js") {
-      response.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-cache" });
+      response.writeHead(200, { 
+        "Content-Type": "application/javascript", 
+        "Cache-Control": "no-cache",
+        "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+        "Cross-Origin-Embedder-Policy": "unsafe-none"
+      });
       response.end(`window.SKILL_ARION_CONFIG = { googleClientId: "${googleClientId.trim()}" };`);
       return;
     }
@@ -768,6 +773,8 @@ function serveStatic(requestedUrl, response) {
     response.writeHead(200, {
       "Content-Type": contentTypes[path.extname(filePath)] || "application/octet-stream",
       "Cache-Control": "no-store",
+      "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+      "Cross-Origin-Embedder-Policy": "unsafe-none"
     });
     response.end(content);
   });
