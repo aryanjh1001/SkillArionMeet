@@ -244,16 +244,11 @@ async function handleApi(request, response, requestedUrl) {
     const candidate = (db.candidates || []).find(item => {
       return String(item.email || "").trim().toLowerCase() === profile.email;
     });
-    if (!candidate) {
-      sendJson(response, 403, { error: "Admin has not added this Google account to the candidate list." });
-      return;
-    }
-    if ((candidate.consentStatus || candidate.status) !== "Accepted") {
-      sendJson(response, 403, { error: "Accept the candidate invitation before signing in." });
-      return;
-    }
+    
+    // Admin approval and consent gate has been removed per user request
+    
     const user = {
-      name: profile.name || candidate.name || "Candidate User",
+      name: profile.name || (candidate && candidate.name) || "Candidate User",
       email: profile.email,
       role: "Candidate",
       picture: profile.picture || "",
