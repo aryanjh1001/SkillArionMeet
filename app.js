@@ -2152,6 +2152,7 @@ async function joinMeetingWithCode(codeValue) {
       });
       
       socket.on("user-connected", async (userPayload, socketId) => {
+        console.log(`[user-connected] Remote peer joined. socketId=${socketId}, role=${userPayload?.role}, name=${userPayload?.name}`);
         remoteUsers[socketId] = userPayload;
         const pc = createPeerConnection(socketId, userPayload);
         
@@ -2163,7 +2164,10 @@ async function joinMeetingWithCode(codeValue) {
            if (state.stream) state.stream.getTracks().forEach(t => streamToShare.addTrack(t));
            if (state.audioStream) state.audioStream.getTracks().forEach(t => streamToShare.addTrack(t));
         }
-        streamToShare.getTracks().forEach(track => pc.addTrack(track, streamToShare));
+        
+        const tracks = streamToShare.getTracks();
+        console.log(`[user-connected] Adding ${tracks.length} tracks to pc for socketId=${socketId}. Ready states:`, tracks.map(t => `${t.kind}:${t.readyState}`).join(", "));
+        tracks.forEach(track => pc.addTrack(track, streamToShare));
         render();
       });
 
@@ -2175,6 +2179,7 @@ async function joinMeetingWithCode(codeValue) {
       });
 
       socket.on("webrtc-offer", async (socketId, offer, userPayload) => {
+        console.log(`[webrtc-offer] Received offer from socketId=${socketId}, role=${userPayload?.role}`);
         let pc = peerConnections[socketId];
         if (!pc) {
           remoteUsers[socketId] = userPayload;
@@ -2185,7 +2190,9 @@ async function joinMeetingWithCode(codeValue) {
              if (state.stream) state.stream.getTracks().forEach(t => streamToShare.addTrack(t));
              if (state.audioStream) state.audioStream.getTracks().forEach(t => streamToShare.addTrack(t));
           }
-          streamToShare.getTracks().forEach(track => pc.addTrack(track, streamToShare));
+          const tracks = streamToShare.getTracks();
+          console.log(`[webrtc-offer] Adding ${tracks.length} tracks to pc for socketId=${socketId}. Ready states:`, tracks.map(t => `${t.kind}:${t.readyState}`).join(", "));
+          tracks.forEach(track => pc.addTrack(track, streamToShare));
         }
         
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
@@ -2875,16 +2882,27 @@ function initials(name) {
 }
 
 function createPeerConnection(socketId, userPayload) {
+  console.log(`[createPeerConnection] Creating new RTCPeerConnection for socketId=${socketId}`);
   const pc = new RTCPeerConnection(rtcConfig);
   peerConnections[socketId] = pc;
   
+  pc.oniceconnectionstatechange = () => {
+    console.log(`[iceconnectionstatechange] socketId=${socketId} state changed to: ${pc.iceConnectionState}`);
+  };
+
   pc.onicecandidate = (event) => {
-    if (event.candidate && socket) {
-      socket.emit("webrtc-ice-candidate", socketId, event.candidate);
+    if (event.candidate) {
+      console.log(`[onicecandidate] Generated candidate for socketId=${socketId}. Type: ${event.candidate.type}, Protocol: ${event.candidate.protocol}`);
+      if (socket) {
+        socket.emit("webrtc-ice-candidate", socketId, event.candidate);
+      }
+    } else {
+      console.log(`[onicecandidate] Candidate gathering complete for socketId=${socketId}.`);
     }
   };
   
   pc.onnegotiationneeded = async () => {
+    console.log(`[onnegotiationneeded] Fired for socketId=${socketId}. Creating offer...`);
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
