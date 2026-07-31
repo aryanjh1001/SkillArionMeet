@@ -1093,14 +1093,9 @@ function getMeetingAccessError(db, meeting, body) {
     return "You are not allowed to join this meeting. This meeting is for candidates only.";
   }
 
+  // Candidates can join directly without being in the candidates list or having accepted an invitation
   if (role === "candidate") {
-    const candidate = (db.candidates || []).find(item => String(item.email || "").trim().toLowerCase() === email);
-    if (!candidate) {
-      return "Candidate invitation was not found. Please contact the admin.";
-    }
-    if ((candidate.consentStatus || candidate.status) !== "Accepted") {
-      return "Please accept the SkillArionDevelopment invitation before joining meetings.";
-    }
+    // Admin approval check removed
   }
 
   if (accessMode === "guests" && role !== "guest") {
