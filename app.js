@@ -2280,15 +2280,21 @@ async function joinMeetingWithCode(codeValue) {
       });
     }
     try {
-      state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      state.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       state.cameraOn = true;
-      state.micOn = true;
-      // Start tracks as disabled so they are muted by default, giving users privacy
       state.stream.getTracks().forEach(t => t.enabled = false);
       state.cameraOn = false;
+    } catch (e) {
+      console.error("Could not capture video before joining:", e);
+    }
+    
+    try {
+      state.audioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+      state.micOn = true;
+      state.audioStream.getTracks().forEach(t => t.enabled = false);
       state.micOn = false;
     } catch (e) {
-      console.error("Could not capture media before joining:", e);
+      console.error("Could not capture audio before joining:", e);
     }
     socket.emit("join-room", code, { email: state.user.email, name: state.user.name, role: state.user.role });
     
