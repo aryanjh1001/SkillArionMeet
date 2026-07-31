@@ -123,6 +123,24 @@ function render() {
     return;
   }
 
+  // Preserve video elements to maintain WebRTC state and prevent lag/flashing
+  const savedVideos = new Map();
+  let savedChatVal = "";
+  let chatWasFocused = false;
+  if (state.route === "meeting") {
+    document.querySelectorAll("video").forEach(v => {
+      if (v.id) {
+        savedVideos.set(v.id, v);
+        v.parentNode.removeChild(v);
+      }
+    });
+    const chatInput = document.getElementById("chatInput");
+    if (chatInput) {
+      savedChatVal = chatInput.value;
+      chatWasFocused = document.activeElement === chatInput;
+    }
+  }
+
   app.innerHTML = `
     <div class="app-shell ${state.route === "meeting" ? "meeting-shell" : ""}">
       <header class="topbar workspace-topbar">
@@ -157,6 +175,22 @@ function render() {
       </main>
     </div>
   `;
+
+  // Restore preserved video elements BEFORE binding shell so srcObjects match
+  if (state.route === "meeting") {
+    savedVideos.forEach((videoEl, id) => {
+      const placeholder = document.getElementById(id);
+      if (placeholder && placeholder.tagName === "VIDEO") {
+        placeholder.parentNode.replaceChild(videoEl, placeholder);
+      }
+    });
+    const newChatInput = document.getElementById("chatInput");
+    if (newChatInput && savedChatVal !== undefined) {
+      newChatInput.value = savedChatVal;
+      if (chatWasFocused) newChatInput.focus();
+    }
+  }
+
   bindShell();
 }
 
@@ -2276,6 +2310,14 @@ async function joinMeetingWithCode(codeValue) {
         }
         delete remoteStreams[socketId];
         delete remoteUsers[socketId];
+        
+        if (userPayload?.email && state.activeMeeting?.code) {
+           const row = attendanceRows.find(r => r.meetingCode === state.activeMeeting.code && String(r.email).toLowerCase() === String(userPayload.email).toLowerCase() && !r.leaveTime);
+           if (row) {
+              row.leaveTime = new Date().toISOString();
+           }
+        }
+        
         render();
       });
     }
