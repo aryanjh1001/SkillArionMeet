@@ -64,8 +64,7 @@ let socket = null;
 let peerConnections = {};
 let makingOffers = {};
 let ignoreOffers = {};
-let isSettingRemoteAnswerPendings = {};
-let iceCandidateQueues = {};
+let isProcessingOffers = {};
 let remoteStreams = {};
 let remoteUsers = {};
 
@@ -618,9 +617,10 @@ function renderMeeting() {
               <div class="tile-name">${person.name} | ${person.role}</div>
             </div>
           `).join("")}
-          ${Object.keys(remoteStreams).map(socketId => `
+          ${Object.keys(remoteUsers).map(socketId => `
             <div class="tile remote-tile" data-socket="${socketId}">
-              <video id="remoteVideo-${socketId}" autoplay playsinline></video>
+              <video id="remoteVideo-${socketId}" autoplay playsinline ${!remoteStreams[socketId] ? 'style="display:none"' : ''}></video>
+              ${!remoteStreams[socketId] ? `<div class="tile-initial">${initials(remoteUsers[socketId]?.name || 'Participant')}</div>` : ''}
               <div class="tile-name">${remoteUsers[socketId]?.name || 'Participant'}</div>
               ${remoteUsers[socketId]?.handRaised ? `<div class="hand-raise-badge">✋</div>` : ""}
             </div>
@@ -2237,6 +2237,7 @@ async function joinMeetingWithCode(codeValue) {
         
         if (!pc) return; // Should not happen, but safeguard
 
+        isProcessingOffers[socketId] = true;
         try {
           const isPolite = socket.id > socketId;
           const offerCollision = (description.type === "offer") && (makingOffers[socketId] || pc.signalingState !== "stable");
@@ -2264,6 +2265,8 @@ async function joinMeetingWithCode(codeValue) {
           }
         } catch (err) {
           console.error("[webrtc-description] Error processing description:", err);
+        } finally {
+          isProcessingOffers[socketId] = false;
         }
       });
 
@@ -2973,7 +2976,7 @@ function createPeerConnection(socketId, userPayload) {
   peerConnections[socketId] = pc;
   makingOffers[socketId] = false;
   ignoreOffers[socketId] = false;
-  isSettingRemoteAnswerPendings[socketId] = false;
+  isProcessingOffers[socketId] = false;
   iceCandidateQueues[socketId] = [];
   
   pc.oniceconnectionstatechange = () => {
@@ -2992,6 +2995,10 @@ function createPeerConnection(socketId, userPayload) {
   };
   
   pc.onnegotiationneeded = async () => {
+    if (isProcessingOffers[socketId]) {
+      console.log(`[onnegotiationneeded] Skipped for socketId=${socketId} because we are currently processing an offer.`);
+      return;
+    }
     console.log(`[onnegotiationneeded] Fired for socketId=${socketId}. Creating offer...`);
     try {
       makingOffers[socketId] = true;
