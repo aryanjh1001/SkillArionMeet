@@ -2216,10 +2216,11 @@ async function joinMeetingWithCode(codeValue) {
         }
       });
 
-      socket.on("webrtc-offer", async (socketId, offer, userPayload) => {
-        console.log(`[webrtc-offer] Received offer from socketId=${socketId}, role=${userPayload?.role}`);
+      socket.on("webrtc-description", async (socketId, description, userPayload) => {
+        console.log(`[webrtc-description] Received ${description.type} from socketId=${socketId}`);
         let pc = peerConnections[socketId];
-        if (!pc) {
+        
+        if (!pc && description.type === "offer") {
           remoteUsers[socketId] = userPayload;
           pc = createPeerConnection(socketId, userPayload);
           
@@ -2229,57 +2230,40 @@ async function joinMeetingWithCode(codeValue) {
              if (state.audioStream) state.audioStream.getTracks().forEach(t => streamToShare.addTrack(t));
           }
           const tracks = streamToShare.getTracks();
-          console.log(`[webrtc-offer] Adding ${tracks.length} tracks to pc for socketId=${socketId}. Ready states:`, tracks.map(t => `${t.kind}:${t.readyState}`).join(", "));
+          console.log(`[webrtc-description] Adding ${tracks.length} tracks to pc for socketId=${socketId}.`);
           tracks.forEach(track => pc.addTrack(track, streamToShare));
+          render(); // FIX: Guest UI redraws immediately when receiving an offer, even if tracks are disabled
         }
         
+        if (!pc) return; // Should not happen, but safeguard
+
         try {
           const isPolite = socket.id > socketId;
-          const offerCollision = (makingOffers[socketId] || pc.signalingState !== "stable");
+          const offerCollision = (description.type === "offer") && (makingOffers[socketId] || pc.signalingState !== "stable");
 
           ignoreOffers[socketId] = !isPolite && offerCollision;
           if (ignoreOffers[socketId]) {
-            console.log(`[webrtc-offer] Collision detected. I am impolite. Ignoring offer from socketId=${socketId}`);
+            console.log(`[webrtc-description] Collision detected. I am impolite. Ignoring offer from socketId=${socketId}`);
             return;
           }
 
-          isSettingRemoteAnswerPendings[socketId] = offerCollision;
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          isSettingRemoteAnswerPendings[socketId] = false;
-
-          await pc.setLocalDescription();
-          socket.emit("webrtc-answer", socketId, pc.localDescription);
+          await pc.setRemoteDescription(new RTCSessionDescription(description));
+          
+          if (description.type === "offer") {
+            await pc.setLocalDescription();
+            socket.emit("webrtc-description", socketId, pc.localDescription);
+          }
 
           const queue = iceCandidateQueues[socketId] || [];
           if (queue.length > 0) {
-             console.log(`[webrtc-offer] Processing ${queue.length} queued ICE candidates for socketId=${socketId}`);
+             console.log(`[webrtc-description] Processing ${queue.length} queued ICE candidates for socketId=${socketId}`);
              for (const candidate of queue) {
                 await pc.addIceCandidate(new RTCIceCandidate(candidate));
              }
              iceCandidateQueues[socketId] = [];
           }
         } catch (err) {
-          console.error("[webrtc-offer] Error processing offer:", err);
-        }
-      });
-
-      socket.on("webrtc-answer", async (socketId, answer) => {
-        const pc = peerConnections[socketId];
-        if (pc) {
-          try {
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
-            
-            const queue = iceCandidateQueues[socketId] || [];
-            if (queue.length > 0) {
-               console.log(`[webrtc-answer] Processing ${queue.length} queued ICE candidates for socketId=${socketId}`);
-               for (const candidate of queue) {
-                  await pc.addIceCandidate(new RTCIceCandidate(candidate));
-               }
-               iceCandidateQueues[socketId] = [];
-            }
-          } catch (err) {
-            console.error("[webrtc-answer] Error processing answer:", err);
-          }
+          console.error("[webrtc-description] Error processing description:", err);
         }
       });
 
@@ -3012,7 +2996,7 @@ function createPeerConnection(socketId, userPayload) {
     try {
       makingOffers[socketId] = true;
       await pc.setLocalDescription();
-      if (socket) socket.emit("webrtc-offer", socketId, pc.localDescription);
+      if (socket) socket.emit("webrtc-description", socketId, pc.localDescription);
     } catch(e) {
       console.error(e);
     } finally {

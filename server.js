@@ -149,12 +149,8 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("hand-raise", socket.id, isRaised);
     });
 
-    socket.on("webrtc-offer", (targetSocketId, offer) => {
-      socket.to(targetSocketId).emit("webrtc-offer", socket.id, offer, userPayload);
-    });
-
-    socket.on("webrtc-answer", (targetSocketId, answer) => {
-      socket.to(targetSocketId).emit("webrtc-answer", socket.id, answer);
+    socket.on("webrtc-description", (targetSocketId, description) => {
+      socket.to(targetSocketId).emit("webrtc-description", socket.id, description, userPayload);
     });
 
     socket.on("webrtc-ice-candidate", (targetSocketId, candidate) => {
